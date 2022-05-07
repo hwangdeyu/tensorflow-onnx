@@ -59,8 +59,8 @@ def get_channels_last_permutation(spatial):
 
 def conv_convert_inputs(ctx, node, with_kernel=False, new_kernel_shape=None,
                         input_indices=None, output_indices=None, spatial=2):
-    """Convert input and kernel from tensorflow to onnx. This maybe require to
-        to insert transpose ops for input, kernel and output unless they are constants
+    """Convert input and kernel from tensorflow to onnx. This may be required to
+        insert transpose ops for input, kernel, and output unless they are constants
         and we can transpose the constant.
         We transpose inputs if they are in NHWC. We always transpose the kernel from
         HWNC to NCHW. Outputs are transposed if the format is NHWC.
@@ -139,12 +139,25 @@ def conv_convert_inputs(ctx, node, with_kernel=False, new_kernel_shape=None,
 
         # If kernel is a constant, transpose that one if we are the only consumer.
         need_transpose = True
-        if kernel_node.is_const() and len(ctx.find_output_consumers(kernel_name)) == 1:
-            val = kernel_node.get_tensor_value(as_list=False)
-            val = np.transpose(val, permutation)
-
-            kernel_node.set_tensor_value(val)
-            need_transpose = False
+        if (kernel_node.is_const() or kernel_node.op.op_type == "DequantizeLinear") \
+            and len(ctx.find_output_consumers(kernel_name)) == 1:
+            if kernel_node.op.op_type == 'DequantizeLinear':
+                # Assuming the model was trained in NHWC in TF,
+                # the weights would be in [fH, fW, C_in, C_out].
+                # orig_conv_weights -> Q -> DQ -> new_conv_weights -> conv
+                weights_node = kernel_node.inputs[0].inputs[0]
+                val = weights_node.get_tensor_value(as_list=False)
+                val = np.transpose(val, permutation)
+                weights_node.set_tensor_value(val)
+                need_transpose = False
+                # Change the quantization axis for Q and DQ node accordingly
+                kernel_node.set_attr("axis", 0) # DQ node
+                kernel_node.inputs[0].set_attr("axis", 0) # Q node
+            else:
+                val = kernel_node.get_tensor_value(as_list=False)
+                val = np.transpose(val, permutation)
+                kernel_node.set_tensor_value(val)
+                need_transpose = False
 
         if need_transpose:
             transpose = ctx.insert_new_node_on_input(node, "Transpose", kernel_name)

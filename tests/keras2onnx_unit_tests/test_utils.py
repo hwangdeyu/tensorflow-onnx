@@ -3,13 +3,14 @@
 import os
 import sys
 import onnx
+from onnx import helper
 import numpy as np
 import mock_keras2onnx
 from mock_keras2onnx.proto import keras, is_keras_older_than
 from mock_keras2onnx.proto.tfcompat import is_tf2
-#from mock_keras2onnx.common.onnx_ops import apply_identity, OnnxOperatorBuilder
 import time
 import json
+import urllib
 
 working_path = os.path.abspath(os.path.dirname(__file__))
 tmp_path = os.path.join(working_path, 'temp')
@@ -161,6 +162,14 @@ def no_loops_in_tf2(onnx_model):
     return not is_tf2 or all(n.op_type != "Loop" for n in onnx_model.graph.node)
 
 
+def all_recurrents_should_bidirectional(onnx_model):
+    return all([
+        helper.get_attribute_value(attr) == b'bidirectional'
+        for node in onnx_model.graph.node if node.op_type in ['GRU', 'LSTM', 'RNN']
+        for attr in node.attribute if attr.name == 'direction'
+    ])
+
+
 def run_onnx_runtime(case_name, onnx_model, data, expected, model_files, rtol=1.e-3, atol=1.e-6,
                      compare_perf=False, enable_profiling=False):
     if not os.path.exists(tmp_path):
@@ -282,3 +291,11 @@ def run_image(model, model_files, img_path, model_name='onnx_conversion', rtol=1
     onnx_model = mock_keras2onnx.convert_keras(model, model.name)
     res = run_onnx_runtime(model_name, onnx_model, x, preds, model_files, rtol=rtol, atol=atol, compare_perf=compare_perf)
     return res, msg
+
+
+def is_bloburl_access(url):
+    try:
+        response = urllib.request.urlopen(url)
+        return response.getcode() == 200
+    except urllib.error.URLError:
+        return False

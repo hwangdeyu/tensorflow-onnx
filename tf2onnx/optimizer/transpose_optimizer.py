@@ -105,7 +105,7 @@ class TransposeOptimizer(GraphOptimizerBase):
                 new_shape = [input_shape[p] for p in perm]
                 return graph.make_const(utils.make_name("new_shape"), np.array(new_shape, dtype=np.int64)).output[0]
 
-            # reshape requires tha output shape can only contain one -1, if not some extra op needed.
+            # reshape requires the output shape can only contain one -1, if not some extra op needed.
             input_shape = graph.make_node("Shape", [op.input[0]]).output[0]
             indice = graph.make_const(utils.make_name("indice"), np.array(perm, np.int64)).output[0]
 
@@ -208,6 +208,7 @@ class TransposeOptimizer(GraphOptimizerBase):
             "Max": self._maxmin_handler,
             "Min": self._maxmin_handler,
             "Mul": self._mul_handler,
+            "Neg": self._simple_through_handler,
             "Pad": self._pad_handler,
             "PRelu": self._prelu_handler,
             "Reciprocal": self._simple_through_handler,
@@ -667,9 +668,12 @@ class TransposeOptimizer(GraphOptimizerBase):
         return False
 
     def _split_handler(self, trans, node):
-        # Todo: need handle cases where Slit node has more than 1 outputs.
+        # Todo: need handle cases where Split node has more than 1 outputs.
         if self._handle_node_having_branches(trans, node):
-            node.set_attr("axis", 1)
+            perm = trans.get_attr_value("perm")
+            axis = node.get_attr_value("axis", 0)
+            new_axis = perm[axis]
+            node.set_attr("axis", new_axis)
             return True
         return False
 

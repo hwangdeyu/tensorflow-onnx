@@ -174,7 +174,6 @@ def get_maxpoolwithargmax_getdata():
 class BackendTests(Tf2OnnxBackendTestBase):
     def _run_test_case(self, func, output_names_with_port, feed_dict, **kwargs):
         kwargs["convert_var_to_const"] = False
-        kwargs["constant_fold"] = False
         return self.run_test_case(func, feed_dict, [], output_names_with_port, **kwargs)
 
     def _test_expand_dims_known_rank(self, idx):
@@ -305,7 +304,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
     def test_multinomial(self):
         x_val = np.array([[10., 10.]], dtype=np.float32)
         def func(x):
-            op = multinomial(tf.math.log(x), 5, output_dtype=tf.int64)
+            op = multinomial(tf.math.log(x), 5, output_dtype=tf.int32)
             return tf.identity(op, name=_TFOUTPUT)
 
         # since returned indexes are random we can only check type and shape
@@ -318,7 +317,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
         shape = [2, 10]
         x_val = np.ones(np.prod(shape)).astype("float32").reshape(shape)
         def func(x):
-            op = multinomial(x, 2, output_dtype=tf.int64)
+            op = multinomial(x, 2, output_dtype=tf.int32)
             return tf.identity(op, name=_TFOUTPUT)
         # since returned indexes are random we can only check type and shape
         self._run_test_case(func, [_OUTPUT], {_INPUT: x_val}, check_value=False,
@@ -709,7 +708,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
         feed_dict = {"input_1:0": x_val}
         input_names_with_port = ["input_1:0"]
         output_names_with_port = ["output:0"]
-        self.run_test_case(func, feed_dict, input_names_with_port, output_names_with_port, constant_fold=False,
+        self.run_test_case(func, feed_dict, input_names_with_port, output_names_with_port,
                            graph_validator=lambda g: (check_op_count(g, "RandomUniform", 0) and
                                                       check_op_count(g, "RandomUniformLike", 0)))
 
@@ -739,6 +738,29 @@ class BackendTests(Tf2OnnxBackendTestBase):
                 return tf.identity(y, name=_TFOUTPUT)
             self._run_test_case(func, [_OUTPUT], {_INPUT: x_val}, rtol=1e-04, atol=1e-2, as_session=True,
                                 graph_validator=lambda g: check_op_count(g, "Reshape", 0, disabled=False))
+
+    @check_tf_min_version("1.15")
+    @skip_tf_cpu("only tf_gpu can run conv2d with NCHW format")
+    def test_conv2d_biasadd_rewriter(self):
+        x_shape = [2, 3, 32, 16]
+        x_val = make_xval(x_shape)
+        def func(x):
+            middles = tf.keras.layers.ZeroPadding2D(
+                padding=(0, 4),
+                data_format="channels_first",
+                name="padding"
+            )(x)
+            t = tf.keras.layers.Conv2D(
+                filters=768,
+                kernel_size=3,
+                strides=1,
+                use_bias=True,
+                data_format="channels_first",
+                name="conv2d"
+            )(middles)
+            return tf.identity(t, name=_TFOUTPUT)
+        self._run_test_case(func, [_OUTPUT], {_INPUT: x_val}, rtol=1e-04, atol=1e-2, as_session=True,
+                            graph_validator=lambda g: check_op_count(g, "Add", 0, disabled=False))
 
     @check_tf_min_version("1.15")
     def test_conv2d_dilations_rewriter(self):
@@ -2350,6 +2372,15 @@ class BackendTests(Tf2OnnxBackendTestBase):
         x_val = np.array([1.0, 2.0, -3.0, -4.0], dtype=np.float32).reshape((2, 2))
         def func(x):
             x_ = tf.cast(x, tf.int32)
+            return tf.identity(x_, name=_TFOUTPUT)
+        self._run_test_case(func, [_OUTPUT], {_INPUT: x_val})
+
+    @skip_tflite("tflite does not support uint32 if tf version <= 2.3.0")
+    @check_opset_min_version(6, "cast")
+    def test_cast_unit32(self):
+        x_val = np.array([1, 2, 3, 4], dtype=np.uint32).reshape((2, 2))
+        def func(x):
+            x_ = tf.cast(x, tf.uint64)
             return tf.identity(x_, name=_TFOUTPUT)
         self._run_test_case(func, [_OUTPUT], {_INPUT: x_val})
 
@@ -4577,6 +4608,14 @@ class BackendTests(Tf2OnnxBackendTestBase):
             return tf.identity(x_, name=_TFOUTPUT)
         self._run_test_case(func, [_OUTPUT], {_INPUT: x_val})
 
+    @check_opset_min_version(11, "Round")
+    def test_rint(self):
+        x_val = np.array([-2.7, -1.5, -0.0, +0.0, 0.3, 0.5, 1.5, 2.5, 3.4, 3.5, float('nan')], dtype=np.float32)
+        def func(x):
+            x_ = tf.math.rint(x)
+            return tf.identity(x_, name=_TFOUTPUT)
+        self._run_test_case(func, [_OUTPUT], {_INPUT: x_val})
+
     @check_opset_min_version(11, "Det")
     @unittest.skip("unclear how this is called in tf-2, fix later")
     def test_determinant(self):
@@ -5189,7 +5228,7 @@ class BackendTests(Tf2OnnxBackendTestBase):
             lookup_results = hash_table.lookup(query_holder)
             ret = tf.add(lookup_results, 0, name=_TFOUTPUT)
             return ret
-        self._run_test_case(func, [_OUTPUT], {_INPUT: query}, constant_fold=False, as_session=True)
+        self._run_test_case(func, [_OUTPUT], {_INPUT: query}, as_session=True)
         os.remove(filnm)
 
     @check_opset_min_version(8, "CategoryMapper")

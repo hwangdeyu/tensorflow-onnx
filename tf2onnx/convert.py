@@ -69,9 +69,9 @@ def get_args():
     parser.add_argument("--use-graph-names", help="(saved model only) skip renaming io using signature names",
                         action="store_true")
     parser.add_argument("--opset", type=int, default=None, help="opset version to use for onnx domain")
-    parser.add_argument("--dequantize", help="Remove quantization from model. Only supported for tflite currently.",
+    parser.add_argument("--dequantize", help="remove quantization from model. Only supported for tflite currently.",
                         action="store_true")
-    parser.add_argument("--custom-ops", help="Comma-separated map of custom ops to domains in format OpName:domain. "
+    parser.add_argument("--custom-ops", help="comma-separated map of custom ops to domains in format OpName:domain. "
                                              "Domain 'ai.onnx.converters.tensorflow' is used by default.")
     parser.add_argument("--extra_opset", default=None,
                         help="extra opset with format like domain:version, e.g. com.microsoft:1")
@@ -83,8 +83,7 @@ def get_args():
     parser.add_argument("--verbose", "-v", help="verbose output, option is additive", action="count")
     parser.add_argument("--debug", help="debug mode", action="store_true")
     parser.add_argument("--output_frozen_graph", help="output frozen tf graph to file")
-    parser.add_argument("--fold_const", help="Deprecated. Constant folding is always enabled.",
-                        action="store_true")
+
     # experimental
     parser.add_argument("--inputs-as-nchw", help="transpose inputs as from nhwc to nchw")
     args = parser.parse_args()
@@ -138,7 +137,7 @@ def make_default_custom_op_handler(domain):
 
 
 def _convert_common(frozen_graph, name="unknown", large_model=False, output_path=None,
-                    output_frozen_graph=None, custom_ops=None, custom_op_handlers=None, **kwargs):
+                    output_frozen_graph=None, custom_ops=None, custom_op_handlers=None, optimizers=None, **kwargs):
     """Common processing for conversion."""
 
     model_proto = None
@@ -165,7 +164,7 @@ def _convert_common(frozen_graph, name="unknown", large_model=False, output_path
             catch_errors = constants.ENV_TF2ONNX_CATCH_ERRORS.upper() == "TRUE"
         else:
             catch_errors = not large_model
-        onnx_graph = optimizer.optimize_graph(g, catch_errors)
+        onnx_graph = optimizer.optimize_graph(g, catch_errors, optimizers=optimizers)
         model_proto = onnx_graph.make_model("converted from {}".format(name),
                                             external_tensor_storage=external_tensor_storage)
     if output_path:
@@ -221,8 +220,11 @@ def main():
                        "See https://github.com/onnx/tensorflow-onnx/issues/1557")
 
     if args.load_op_libraries:
-        for op_path in args.load_op_libraries:
-            tf.load_op_library(op_path)
+        for op_filepath in args.load_op_libraries:
+            # change relative path to absolute path to satisfy the tf.load_op_library().
+            if not os.path.isabs(op_filepath):
+                op_filepath = os.getcwd() + "/" + op_filepath
+            tf.load_op_library(op_filepath)
     if args.graphdef:
         graph_def, inputs, outputs = tf_loader.from_graphdef(args.graphdef, args.inputs, args.outputs)
         model_path = args.graphdef
@@ -353,9 +355,9 @@ def _is_legacy_keras_model(model):
     return False
 
 
-def _from_keras_tf1(model, input_signature=None, opset=None, custom_ops=None, custom_op_handlers=None,
-                    custom_rewriter=None, inputs_as_nchw=None, extra_opset=None, shape_override=None,
-                    target=None, large_model=False, output_path=None):
+def _from_keras_tf1(model, opset=None, custom_ops=None, custom_op_handlers=None, custom_rewriter=None,
+                    inputs_as_nchw=None, extra_opset=None, shape_override=None, target=None,
+                    large_model=False, output_path=None):
     """from_keras for tf 1.15"""
     input_names = [t.name for t in model.inputs]
     output_names = [t.name for t in model.outputs]
@@ -373,6 +375,9 @@ def _from_keras_tf1(model, input_signature=None, opset=None, custom_ops=None, cu
 
     with tf.device("/cpu:0"):
         frozen_graph, initialized_tables = tf_loader.freeze_session(sess, input_names, output_names, get_tables=True)
+        with tf.Graph().as_default():
+            tf.import_graph_def(frozen_graph, name="")
+            frozen_graph = tf_loader.tf_optimize(input_names, output_names, frozen_graph)
         model_proto, external_tensor_storage = _convert_common(
             frozen_graph,
             name=model.name,
@@ -397,7 +402,7 @@ def _from_keras_tf1(model, input_signature=None, opset=None, custom_ops=None, cu
 
 def from_keras(model, input_signature=None, opset=None, custom_ops=None, custom_op_handlers=None,
                custom_rewriter=None, inputs_as_nchw=None, extra_opset=None, shape_override=None,
-               target=None, large_model=False, output_path=None):
+               target=None, large_model=False, output_path=None, optimizers=None):
     """Returns a ONNX model_proto for a tf.keras model.
 
     Args:
@@ -415,13 +420,14 @@ def from_keras(model, input_signature=None, opset=None, custom_ops=None, custom_
         inputs_as_nchw: transpose inputs in list from nchw to nhwc
         large_model: use the ONNX external tensor storage format
         output_path: save model to output_path
+        optimizers: list (subset) of tf2onnx optimizers if applying all optimizers is not desired.
 
     Returns:
         An ONNX model_proto and an external_tensor_storage dict.
     """
     if LooseVersion(tf.__version__) < "2.0":
-        return _from_keras_tf1(model, input_signature, opset, custom_ops, custom_op_handlers, custom_rewriter,
-                               inputs_as_nchw, extra_opset, shape_override, target, large_model, output_path)
+        return _from_keras_tf1(model, opset, custom_ops, custom_op_handlers, custom_rewriter, inputs_as_nchw,
+                               extra_opset, shape_override, target, large_model, output_path)
 
     old_out_names = _rename_duplicate_keras_model_names(model)
     from tensorflow.python.keras.saving import saving_utils as _saving_utils # pylint: disable=import-outside-toplevel
@@ -487,6 +493,7 @@ def from_keras(model, input_signature=None, opset=None, custom_ops=None, custom_
             opset=opset,
             custom_ops=custom_ops,
             custom_op_handlers=custom_op_handlers,
+            optimizers=optimizers,
             custom_rewriter=custom_rewriter,
             extra_opset=extra_opset,
             shape_override=shape_override,
