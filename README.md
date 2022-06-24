@@ -25,7 +25,7 @@ The common issues we run into we try to document here [Troubleshooting Guide](Tr
 
 ### ONNX
 
-tf2onnx will use the ONNX version installed on your system and installs the latest ONNX version if none is found.
+tf2onnx will use the ONNX version installed on your system and install the latest ONNX version if none is found.
 
 We support and test ONNX opset-9 to opset-16. opset-6 to opset-8 should work but we don't test them.
 By default we use ```opset-13``` for the resulting ONNX graph.
@@ -451,7 +451,7 @@ The converter needs to take care of a few things:
 
 1. Convert the protobuf format. Since the format is similar this step is straight forward.
 2. TensorFlow types need to be mapped to their ONNX equivalent.
-3. For many ops TensorFlow passes parameters like shapes as inputs where ONNX wants to see them as attributes. Since we use a frozen graph, the converter will fetch the input as constant, converts it to an attribute and remove the original input.
+3. For many ops TensorFlow passes parameters like shapes as inputs where ONNX wants to see them as attributes. Since we use a frozen graph, the converter will fetch the input as constant, convert it to an attribute and remove the original input.
 4. TensorFlow in many cases composes ops out of multiple simpler ops. The converter will need to identify the subgraph for such ops, slice the subgraph out and replace it with the ONNX equivalent. This can become fairly complex so we use a graph matching library for it. A good example of this is the tensorflow transpose op.
 5. TensorFlow's default data format is NHWC where ONNX requires NCHW. The converter will insert transpose ops to deal with this.
 6. There are some ops like relu6 that are not supported in ONNX but the converter can be composed out of other ONNX ops.
@@ -478,21 +478,21 @@ In the fourth step we look at individual ops that need attention. The dictionary
 
 ### Step 5 - optimize the functional ONNX graph
 
-We than try to optimize the functional ONNX graph. For example we remove ops that are not needed,
+In the fifth we try to optimize the functional ONNX graph. For example we remove ops that are not needed,
 remove transposes as much as possible, de-dupe constants, fuse ops whenever possible, ...
 
 ### Step 6 - final processing
 
-Once all ops are converted and optimize, we need to do a topological sort since ONNX requires it. process_tf_graph() is the method that takes care of all above steps.
+Once all ops are converted and optimized, we need to do a topological sort since ONNX requires it. process_tf_graph() is the method that takes care of all above steps.
 
 ## Extending tf2onnx
 
 If you like to contribute and add new conversions to tf2onnx, the process is something like:
 
-1. See if the op fits into one of the existing mappings. If so adding it to _OPS_MAPPING is all that is needed.
+1. See if the op fits into one of the existing mappings. If so, adding it to _OPS_MAPPING is all that is needed.
 2. If the new op needs extra processing, start a new mapping function.
 3. If the tensorflow op is composed of multiple ops, consider using a graph re-write. While this might be a little harder initially, it works better for complex patterns.
-4. Add a unit test in tests/test_backend.py. The unit tests mostly create the tensorflow graph, run it and capture the output, than convert to onnx, run against a onnx backend and compare tensorflow and onnx results.
+4. Add a unit test in tests/test_backend.py. The unit tests mostly create the tensorflow graph, run it and capture the output, then convert to onnx, run against a onnx backend and compare tensorflow and onnx results.
 5. If there are pre-trained models that use the new op, consider adding those to test/run_pretrained_models.py.
 
 ## License
